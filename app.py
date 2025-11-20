@@ -1,14 +1,17 @@
-from flask import Flask, render_template, request, send_file
+import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-import re, os, zipfile
+import zipfile
+import io
+import re
+import os
 from datetime import datetime
 
-app = Flask(__name__)
+st.set_page_config(page_title="Excel Graph Generator", layout="centered")
 
-UPLOAD_FOLDER = "static/output"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
+# ------------------------
+# Helper Function
+# ------------------------
 def extract_number(val):
     if isinstance(val, str):
         match = re.findall(r"-?\d+\.?\d*", val)
@@ -16,23 +19,26 @@ def extract_number(val):
             return float(match[0])
     return None
 
-@app.route("/", methods=["GET", "POST"])
-def upload_file():
-    if request.method == "POST":
-        file = request.files["excel_file"]
-        if not file:
-            return render_template("upload.html", download_link=None)
 
-        # Save uploaded file temporarily
-        filepath = os.path.join(UPLOAD_FOLDER, "uploaded.xlsx")
-        file.save(filepath)
+# ------------------------
+# Streamlit UI
+# ------------------------
+st.title("📊 Excel Graph Generator")
+st.write("Upload your Excel file and automatically generate graphs.")
 
-        # Process Excel
-        df = pd.read_excel(filepath)
+uploaded_file = st.file_uploader("Choose Excel File", type=["xlsx"])
+
+if uploaded_file:
+    st.success(f"📁 Selected File: **{uploaded_file.name}**")
+
+if uploaded_file and st.button("Generate Graphs"):
+    with st.spinner("Processing file..."):
+        df = pd.read_excel(uploaded_file)
+
+        # Process dataframe similar to Flask
         data = df.iloc[4:].copy()
         data.columns = ["Group", "Code", "Value", "Start", "End"]
 
-        # Clean numeric values
         data["Numeric"] = data["Value"].apply(extract_number)
         data["Start"] = pd.to_datetime(data["Start"], errors="coerce")
 
@@ -42,44 +48,45 @@ def upload_file():
             "Tx_power", "Rx_power"
         ]
 
-        timestamp_folder = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = os.path.join(UPLOAD_FOLDER, timestamp_folder)
-        os.makedirs(output_dir)
+        # Temporary folder inside memory
+        zip_buffer = io.BytesIO()
 
-        # Generate plots
-        for metric in metrics:
-            subset = data[data["Code"] == metric].sort_values("Start")
+        # Start ZIP creation
+        with zipfile.ZipFile(zip_buffer, "w") as zipf:
+            progress = st.progress(0)
 
-            plt.figure(figsize=(12, 5))
-            plt.plot(subset["Start"], subset["Numeric"])
-            plt.title(metric)
-            plt.xlabel("Time")
-            plt.ylabel(metric)
+            for i, metric in enumerate(metrics):
+                subset = data[data["Code"] == metric].sort_values("Start")
 
-            ticks = subset["Start"][::10]
-            plt.xticks(ticks, ticks.dt.strftime('%Y-%m-%d %H:%M'), rotation=90)
+                # Create matplotlib plot
+                plt.figure(figsize=(12, 5))
+                plt.plot(subset["Start"], subset["Numeric"])
+                plt.title(metric)
+                plt.xlabel("Time")
+                plt.ylabel(metric)
 
-            plt.tight_layout()
-            save_path = os.path.join(output_dir, metric.replace(" ", "_") + ".jpeg")
-            plt.savefig(save_path, format="jpeg")
-            plt.close()
+                ticks = subset["Start"][::10]
+                plt.xticks(ticks, ticks.dt.strftime('%Y-%m-%d %H:%M'), rotation=90)
+                plt.tight_layout()
 
-        # Create ZIP file
-        zip_path = os.path.join(UPLOAD_FOLDER, f"{timestamp_folder}.zip")
-        with zipfile.ZipFile(zip_path, 'w') as zipf:
-            for file_name in os.listdir(output_dir):
-                zipf.write(os.path.join(output_dir, file_name),
-                           arcname=file_name)
+                # Save image to memory
+                img_bytes = io.BytesIO()
+                plt.savefig(img_bytes, format="jpeg")
+                img_bytes.seek(0)
+                plt.close()
 
-        return render_template("upload.html",
-                               download_link=f"/download/{timestamp_folder}")
+                # Add to ZIP
+                zipf.writestr(metric.replace(" ", "_") + ".jpeg", img_bytes.read())
 
-    return render_template("upload.html", download_link=None)
+                # Update progress bar
+                progress.progress((i + 1) / len(metrics))
 
-@app.route("/download/<folder>")
-def download_zip(folder):
-    zip_file = os.path.join(UPLOAD_FOLDER, f"{folder}.zip")
-    return send_file(zip_file, as_attachment=True)
+    st.success("✔ Graphs generated successfully!")
 
-if __name__ == "__main__":
-    app.run(debug=True)
+    # Download ZIP button
+    st.download_button(
+        label="⬇ Download ZIP File",
+        data=zip_buffer.getvalue(),
+        file_name=f"graphs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+        mime="application/zip"
+    )
