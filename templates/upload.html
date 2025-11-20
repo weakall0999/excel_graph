@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Excel Graph Generator</title>
+</head>
+
+<body>
+    <h1>Upload Excel File</h1>
+    <form action="/" method="post" enctype="multipart/form-data">
+        <input type="file" name="excel_file" required>
+        <button type="submit">Generate Graphs</button>
+    </form>
+
+    {% if download_link %}
+    <hr>
+    <h2>Graphs Ready!</h2>
+    <a href="{{ download_link }}">Download All Graphs (ZIP)</a>
+    {% endif %}
+</body>
+
+</html>
